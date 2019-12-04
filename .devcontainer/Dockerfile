@@ -1,56 +1,39 @@
-FROM ubuntu:18.04
+#-------------------------------------------------------------------------------------------------------------
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License. See https://go.microsoft.com/fwlink/?linkid=2090316 for license information.
+#-------------------------------------------------------------------------------------------------------------
+FROM ubuntu:bionic
 
-ENV sdk_bin https://download.01.org/intel-sgx/linux-2.5/ubuntu18.04-server/sgx_linux_x64_sdk_2.5.100.49891.bin
-ENV psw_deb https://download.01.org/intel-sgx/linux-2.5/ubuntu18.04-server/libsgx-enclave-common_2.5.101.50123-bionic1_amd64.deb
-ENV psw_dev_deb https://download.01.org/intel-sgx/linux-2.5/ubuntu18.04-server/libsgx-enclave-common-dev_2.5.101.50123-bionic1_amd64.deb
-ENV psw_dbgsym_deb https://download.01.org/intel-sgx/linux-2.5/ubuntu18.04-server/libsgx-enclave-common-dbgsym_2.5.101.50123-bionic1_amd64.ddeb
-ENV substratee_node https://github.com/scs/substraTEE-node/archive/M1.zip
-ENV substratee_worker https://github.com/scs/substraTEE-worker/archive/M1.zip
-ENV rust_toolchain nightly
+# Avoid warnings by switching to noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TERM xterm
 
-SHELL ["/bin/bash", "-c"]
+# This Dockerfile adds a non-root 'vscode' user with sudo access. However, for Linux,
+# this user's GID/UID must match your local user UID/GID to avoid permission issues
+# with bind mounts. Update USER_UID / USER_GID if yours is not 1000. See
+# https://aka.ms/vscode-remote/containers/non-root-user for details.
+ARG USERNAME=vscode
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
 
-RUN apt-get update && \
-    apt-get install -y build-essential ocaml ocamlbuild automake autoconf \
-    libtool wget python libssl-dev libcurl4-openssl-dev protobuf-compiler \
-    libprotobuf-dev sudo kmod vim curl git-core libprotobuf-c0-dev \
-    libboost-thread-dev libboost-system-dev liblog4cpp5-dev libjsoncpp-dev \
-    alien uuid-dev libxml2-dev cmake pkg-config expect systemd-sysv gdb unzip \
-    clang libclang-dev rsync && \
-    rm -rf /var/lib/apt/lists/* && \
-    rm -rf /var/cache/apt/archives/*
+# Configure apt and install packages
+RUN apt-get update \
+    && apt-get -y install --no-install-recommends apt-utils dialog 2>&1 \
+    #
+    # Verify git, process tools, lsb-release (common in install instructions for CLIs) installed
+    && apt-get -y install git iproute2 procps lsb-release \
+    #
+    # Create a non-root user to use if preferred - see https://aka.ms/vscode-remote/containers/non-root-user.
+    && groupadd --gid $USER_GID $USERNAME \
+    && useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $USERNAME \
+    # [Optional] Add sudo support for the non-root user
+    && apt-get install -y sudo \
+    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME\
+    && chmod 0440 /etc/sudoers.d/$USERNAME \
+    #
+    # Clean up
+    && apt-get autoremove -y \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir /root/sgx && \
-    mkdir /etc/init && \
-    wget -O /root/sgx/psw.deb ${psw_deb} && \
-    wget -O /root/sgx/psw_dev.deb ${psw_dev_deb} && \
-    wget -O /root/sgx/psw_dbgsym.deb ${psw_dbgsym_deb} && \
-    wget -O /root/sgx/sdk.bin ${sdk_bin} && \
-    cd /root/sgx && \
-    dpkg -i /root/sgx/psw.deb && \
-    dpkg -i /root/sgx/psw_dev.deb && \
-    dpkg -i /root/sgx/psw_dbgsym.deb && \
-    chmod +x /root/sgx/sdk.bin && \
-    echo -e 'no\n/opt' | /root/sgx/sdk.bin && \
-    echo 'source /opt/sgxsdk/environment' >> /root/.bashrc && \
-    rm -rf /root/sgx/*
-
-# installing rust-sgx-sdk
-RUN wget 'https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init' -O /root/rustup-init && \
-    chmod +x /root/rustup-init && \
-    echo '1' | /root/rustup-init --default-toolchain ${rust_toolchain} && \
-    echo 'source /root/.cargo/env' >> /root/.bashrc && \
-    /root/.cargo/bin/rustup component add rust-src && \
-    /root/.cargo/bin/cargo install xargo && \
-    rm -rf /root/.cargo/registry && rm -rf /root/.cargo/git
-
-### downloading and extracting the substraTEE components
-RUN mkdir /substraTEE && \
-    wget -O /substraTEE/substraTEE-node.zip ${substratee_node} && \
-    wget -O /substraTEE/substraTEE-worker.zip ${substratee_worker} && \
-    cd /substraTEE && \
-    unzip substraTEE-node.zip && \
-    unzip substraTEE-worker.zip && \
-    rm substraTEE-*.zip
+# Switch back to dialog for any ad-hoc use of apt-get
+ENV DEBIAN_FRONTEND=dialog
